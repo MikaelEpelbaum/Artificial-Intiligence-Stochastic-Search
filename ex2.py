@@ -22,11 +22,16 @@ class OptimalTaxiAgent:
         initial_state = {'taxis': self.initial_improved['taxis'], 'passengers': passengers, 'remains': len(passengers)}
 
         all_actions = Moves.actions(self, initial_state)
-        self.optimal_actions = self.value_iteration_algorithm()
+        self.optimal_actions = self.value_iteration_algorithm(self, all_actions)
 
 
     def act(self, state):
         raise NotImplemented
+
+    def value_iteration_algorithm(self, all_actions):
+        pass
+
+
 
 
 class TaxiAgent:
@@ -50,6 +55,7 @@ class Moves:
         return list(product(taxis_possibilities, passengers_possibilities))
 
 
+# all the options there are on the grid for the taxi to be and the passengers
 def taxisComputation(map):
         n, m = np.shape(map)
         # all possible locations
