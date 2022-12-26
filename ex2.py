@@ -22,15 +22,19 @@ class OptimalTaxiAgent:
         passengers = {passenger: (passengers.get(passenger), False) for passenger in passengers.keys()}
         initial_state = {'taxis': self.initial_improved['taxis'], 'passengers': passengers, 'remains': len(passengers)}
 
-        all_actions = Moves.actions(self, initial_state)
-        self.optimal_actions = self.value_iteration_algorithm(self, all_actions)
+        all_states = Moves.actions(self, initial_state)
+        self.optimal_actions = self.value_iteration_algorithm(all_states)
 
 
     def act(self, state):
         raise NotImplemented
 
-    def value_iteration_algorithm(self, all_actions):
-        pass
+    def value_iteration_algorithm(self, all_states):
+        # V0 set values (distribute values at beginning)
+        for state in all_states:
+            taxis_locs = [taxi['location'] for taxi in state['taxis']]
+            passengers_loc_at_dest = [passenger['location'] for passenger in state['passengers'] if passenger['location'] == passenger['destination']]
+        return 0
 
 
 
@@ -126,40 +130,53 @@ def taxisComputation(input):
     for pre in pre_state:
         fuels = []
         capacities = []
-        # je doit metre des fuel possible uniquementet pas toutes les option en fonction de la distance minimal de la station d'escence
+        # je doit metre des fuel possible uniquementet pas toutes les options en fonction de la distance minimal de la station d'escence
         # ou de la case de depart
 
         highest_fuel_possible_at_location = max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map, input.initial['taxis'])
-
+        fuels = [i for i in range(highest_fuel_possible_at_location + 1)]
         # for i in range(len(pre[0])):
         #     fuels.append([i for i in range(state['taxis'][pre[0][i]]['fuel']+1)])
-        for i in range(len(pre[0])):
-            fuels.append([i for i in range(highest_fuel_possible_at_location + 1)])
-        for i in range(len(pre[0])):
-            capacities.append([i for i in range(state['taxis'][pre[0][i]]['capacity']+1)])
 
-        fuel_capacity_combinations = []
-        for i in range(len(pre[0])):
-            fuel_capacity_combinations.append(list(product(fuels[i], capacities[i])))
+        # for i in range(len(pre[0])):
+        #     fuels.append([i for i in range(highest_fuel_possible_at_location + 1)])
+        # for i in range(len(pre[0])):
+        #     capacities.append([i for i in range(state['taxis'][pre[0][i]]['capacity']+1)])
+        #
+        # fuel_capacity_combinations = []
+        # for i in range(len(pre[0])):
+        #     fuel_capacity_combinations.append(list(product(fuels[i], capacities[i])))
+
+        # one taxi
+        # if len(taxis) == 1:
+        #     for comb in fuel_capacity_combinations[0]:
+        # #       states avec les passager
+        #         passengers = list(input.initial['passengers'].keys())
+        #         # passengers combinations
+        #         for i in range(comb[1]):
+        #             c = list(combinations(passengers, i))[0]
+        #             taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': comb[0], 'capacity': comb[1]}}, [c]]})
 
         # one taxi
         if len(taxis) == 1:
-            for comb in fuel_capacity_combinations[0]:
-                taxis_states.append({'taxis': {pre[0][0]: {'location': pre[1][0], 'fuel': comb[0], 'capacity': comb[1]}}})
+            for fuel in fuels:
+                cap = input.initial['taxis'][pre[0][0]]['capacity']
+                #states avec les passager
+                taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, []]})
+                passengers = list(input.initial['passengers'].keys())
+                for i in range(min(cap, len(passengers))):
+                    c = list(list(combinations(passengers, i+1))[0])
+                    taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, c]})
 
-        # two taxis
-        if len(taxis) == 2 and len(fuel_capacity_combinations) == 2:
-            comb = list(product(fuel_capacity_combinations[0], fuel_capacity_combinations[1]))
-            for c in comb:
-                taxis_states.append({'taxis': {pre[0][0]: {'location': pre[1][0], 'fuel': c[0][0], 'capacity': c[0][1]},
-                                               pre[0][1]: {'location': pre[1][1], 'fuel': c[1][0], 'capacity': c[1][1]}}})
+
+        # todo: TEMPORARY, CHANGE WHEN FINISHED WITH ONE TAXI
+        # # two taxis
+        # if len(taxis) == 2 and len(fuel_capacity_combinations) == 2:
+        #     comb = list(product(fuel_capacity_combinations[0], fuel_capacity_combinations[1]))
+        #     for c in comb:
+        #         taxis_states.append({'taxis': {pre[0][0]: {'location': pre[1][0], 'fuel': c[0][0], 'capacity': c[0][1]},
+        #                                        pre[0][1]: {'location': pre[1][1], 'fuel': c[1][0], 'capacity': c[1][1]}}})
     return taxis_states
-
-
-
-
-
-
 
 
 def passengersComputation(passengers):
