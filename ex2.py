@@ -14,27 +14,25 @@ class OptimalTaxiAgent:
         self.map = np.array(initial["map"])
         self.initial_improved['number_taxis'] = len(initial['taxis'].keys())
         self.initial_improved['number_passengers'] = len(initial['passengers'].keys())
+        self.initial_improved['remains'] = len(initial['passengers'].keys())
         taxis = self.initial_improved["taxis"]
         # original taxi data, passenger in taxi, current fuel
-        self.initial_improved['taxis'] = {taxi: (taxis.get(taxi), [], taxis.get(taxi)['fuel']) for taxi in taxis.keys()}
+        # self.initial_improved['taxis'] = {taxi: (taxis.get(taxi), [], taxis.get(taxi)['fuel']) for taxi in taxis.keys()}
+        self.initial_improved['taxis'] = {taxi: (taxis.get(taxi), []) for taxi in taxis.keys()}
         passengers = initial["passengers"]
         # boolean False to indicate passenger wasn't picked yet
         passengers = {passenger: (passengers.get(passenger), False) for passenger in passengers.keys()}
         initial_state = {'taxis': self.initial_improved['taxis'], 'passengers': passengers, 'remains': len(passengers)}
 
-        all_states = Moves.actions(self, initial_state)
+        all_states = Moves.states(self, initial_state)
         self.optimal_actions = self.value_iteration_algorithm(all_states)
 
 
     def act(self, state):
         raise NotImplemented
 
-    def value_iteration_algorithm(self, all_states):
-        # V0 set values (distribute values at beginning)
-        for state in all_states:
-            taxis_locs = [taxi['location'] for taxi in state['taxis']]
-            passengers_loc_at_dest = [passenger['location'] for passenger in state['passengers'] if passenger['location'] == passenger['destination']]
-        return 0
+    def value_iteration_algorithm(self, v0):
+        return value_iteration(self.initial_improved, v0)
 
 
 
@@ -48,16 +46,130 @@ class TaxiAgent:
 
 
 class Moves:
-    def actions(self, state):
+    def states(self, state):
         """Returns all the actions that can be executed in the given
         state. The result should be a tuple (or other iterable) of actions
         as defined in the problem description file"""
-        states = []
-        n, m = np.shape(self.map)
+        return statesComputation(self)
 
-        taxis_possibilities = taxisComputation(self)
-        passengers_possibilities = passengersComputation(state['passengers'])
-        return list(product(taxis_possibilities, passengers_possibilities))
+
+    def actions(state):
+        """Returns all the actions that can be executed in the given
+        state. The result should be a tuple (or other iterable) of actions
+        as defined in the problem description file"""
+        if state["remains"] == 0:
+            return
+        n, m = np.shape(state['map'])
+        steps = [(0, 1), (1, 0), (0, -1), (-1, 0)]
+        taxis_dict = state["taxis"]
+        taxis_actions = {taxi: [] for taxi in taxis_dict.keys()}
+        passengers = state["passengers"]
+        passengers_to_collect = [passenger for passenger in list(passengers.keys()) if passengers[passenger]['location'] != passengers[passenger]['destination']]
+        refuel = []
+        global_actions = {}
+        impossibles = tuple(zip(*np.where(state['map'] == 'I')))
+        for taxi, taxi_details in taxis_dict.items():
+            curr_pos = np.asarray(taxi_details[0]["location"])
+            # curr_fuel = taxi_details[2]
+            curr_occupancy = len(taxi_details[1])
+            all_moves = [curr_pos + np.asarray(step) for step in steps]
+            # all possible direction movement listing
+            for move in all_moves:
+                if 0 <= move[0] < n and 0 <= move[1] < m and tuple(move) not in impossibles:
+                    taxis_actions[taxi].append(("move", taxi, tuple(move)))
+            # passegers that can be piked listing
+            # todo:verifier que les type son comparable
+            passengers_to_pick = [passenger for passenger in passengers_to_collect if
+                                  tuple(passengers[passenger]["location"]) == tuple(curr_pos)]
+            for pas in passengers_to_pick:
+                taxis_actions[taxi].append(("pick up", taxi, pas))
+            # does the taxi has passengers?
+            if len(taxis_dict[taxi][1]) > 0:
+                to_drop_off = [passenger for passenger, loc_pos in passengers.items() if
+                               loc_pos[0]["destination"] == loc_pos[0]["location"] and passenger in taxis_dict[taxi][1]]
+                for pas in to_drop_off:
+                    taxis_actions[taxi].append(("drop off", taxi, pas))
+            if state['map'][[taxis_dict[taxi][0]["location"]][0][0]][[taxis_dict[taxi][0]["location"]][0][1]] == 'G':
+                refuel = [("refuel", taxi)]
+
+            global_actions[taxi] = [taxis_actions[taxi] + [("wait", taxi)] + refuel]
+
+        all_moves = [global_actions[act][0] for act in global_actions.keys()]
+        cartesian = [element for element in product(*all_moves)]
+
+        # todo: remove impossible moves if two taxis go to the same tile
+        cart_copy = cartesian.copy()
+        if len(state['taxis']) == 1:
+            for cart in cartesian:
+                if len(cart) > 1:
+                    moves = []
+                    for ac in cart:
+                        if ac[0] == 'move':
+                            moves.append(ac[2])
+                        if ac[0] == 'wait' or ac[0] == 'pick up' or ac[0] == 'refuel' or ac[0] == 'drop off':
+                            moves.append(tuple(state['taxis'][ac[1]][0]['location']))
+                    moves_length = len(moves)
+                    moves_reduced = len(set(moves))
+                    if moves_length > moves_reduced:
+                        cart_copy.remove(cart)
+            cartesian = cart_copy
+        return cartesian
+
+
+def value_iteration(state, v0):
+    if state['turns to go'] == 0:
+        return
+    state['turns to go']-=1
+    possible_actions = Moves.actions(state)
+    chain = []
+    for action_set in possible_actions:
+        # chose state representing action
+        for action in action_set:
+            l = len(action)
+            new_state = copy.deepcopy(state)
+            new_state['turns to go'] -= 1
+            if l > 2:
+                if action[0] == 'move':
+                    new_state = copy.deepcopy(state)
+                    new_state['taxis'][action[1]][0]['fuel'] -= 1
+                    new_state['taxis'][action[1]][0]['location'] = action[2]
+                    for pas in new_state['taxis'][action[1]][1]:
+                        new_state['passengers'][pas]['location'] = action[2]
+                    for a in v0:
+                        if a['taxis'][action[1]][0]['location'] == new_state['taxis'][action[1]][0]['location']:
+                            if a['taxis'][action[1]][0]['fuel'] == new_state['taxis'][action[1]][0]['fuel']:
+                                for pas in list(new_state['passengers'].keys()):
+                                    if new_state['passengers'][pas]['location'] == a['passengers'][pas]['location']:
+                                        temp = copy.deepcopy(new_state)
+                                        temp['taxis'][action[1]] = a['taxis'][action[1]]
+                                        temp['passengers'] = copy.deepcopy(a['passengers'])
+                                        temp['reward'] = a['reward']
+                                        chain.append(temp)
+
+                if action[0] == 'pick up':
+
+                    for taxi in a['taxis']:
+                        for tax in list(taxi.keys()):
+                            if tax == action[1] and new_state['taxis'][tax][0]['capacity'] > len(new_state['taxis'][tax][1]):
+                                new_state['taxis'][tax][0][1] = new_state['taxis'][tax][0][1] + [action[2]]
+                                chain.append(new_state)
+                if action[0] == 'drop off':
+                    new_state = copy.deepcopy(state)
+            #         reward = 100
+            if l > 1:
+                if action[0] == 'refuel':
+                    print('')
+                if action[0] == 'wait':
+                    chain.append(copy.deepcopy(state))
+#                     RAJOUTER LE REWARD
+#     calculate shits now and use recursion principle
+    chain = listDictsRemoveDuplicates(chain)
+    reward = []
+    for c in chain:
+
+        print('')
+
+#     v(T)
 
 
 def flatten(l):
@@ -92,10 +204,18 @@ def max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map,
     min_dist_cur_loc_gas = min(nx.shortest_path_length(G, source=cur_loc, target=g) for g in gas_indx)
     return taxis[pre[0][0]]['fuel'] - min_dist_cur_loc_gas
 
+def get_reward(taxis, passengers):
+    #todo: think if I should implement the rest of the grading here or even if this grading is right here
+    count = []
+    for passenger in passengers:
+        for taxi in list(taxis.keys()):
+            if passengers[passenger]['location'] == passengers[passenger]['destination'] and passenger not in taxis[taxi][1]:
+                count.append(100)
+    return sum(count)
 
 
 # all the options there are on the grid for the taxi to be and the passengers
-def taxisComputation(input):
+def statesComputation(input):
     map = input.map
     n, m = np.shape(map)
     # all possible locations
@@ -126,7 +246,8 @@ def taxisComputation(input):
 
 
     # every taxis fuel possibilities
-    taxis_states = []
+    # taxis_states = []
+    states = []
     for pre in pre_state:
         fuels = []
         capacities = []
@@ -135,38 +256,51 @@ def taxisComputation(input):
 
         highest_fuel_possible_at_location = max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map, input.initial['taxis'])
         fuels = [i for i in range(highest_fuel_possible_at_location + 1)]
-        # for i in range(len(pre[0])):
-        #     fuels.append([i for i in range(state['taxis'][pre[0][i]]['fuel']+1)])
-
-        # for i in range(len(pre[0])):
-        #     fuels.append([i for i in range(highest_fuel_possible_at_location + 1)])
-        # for i in range(len(pre[0])):
-        #     capacities.append([i for i in range(state['taxis'][pre[0][i]]['capacity']+1)])
-        #
-        # fuel_capacity_combinations = []
-        # for i in range(len(pre[0])):
-        #     fuel_capacity_combinations.append(list(product(fuels[i], capacities[i])))
-
-        # one taxi
-        # if len(taxis) == 1:
-        #     for comb in fuel_capacity_combinations[0]:
-        # #       states avec les passager
-        #         passengers = list(input.initial['passengers'].keys())
-        #         # passengers combinations
-        #         for i in range(comb[1]):
-        #             c = list(combinations(passengers, i))[0]
-        #             taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': comb[0], 'capacity': comb[1]}}, [c]]})
-
         # one taxi
         if len(taxis) == 1:
             for fuel in fuels:
                 cap = input.initial['taxis'][pre[0][0]]['capacity']
                 #states avec les passager
-                taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, []]})
+                # taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, []]})
                 passengers = list(input.initial['passengers'].keys())
-                for i in range(min(cap, len(passengers))):
-                    c = list(list(combinations(passengers, i+1))[0])
-                    taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, c]})
+                for i in range(min(cap, len(passengers))+1):
+                    c = list(combinations(passengers, i))
+                    for clients in c:
+                        #passengers data
+                        vector = []
+                        for client in clients:
+                            # client is in taxi
+                            destination = input.initial['passengers'][client]['destination']
+                            possible_goals = [g for g in input.initial['passengers'][client]['possible_goals']]
+                            prob_change_goal = input.initial['passengers'][client]['prob_change_goal']
+                            locs = set(list([destination]) + possible_goals)
+                            for possible_dest in locs:
+                                for possible_loc in locations:
+                                    vector.append({
+                                        client: {'location': possible_loc, 'destination': possible_dest, 'possible_goals': tuple(possible_goals),
+                                                    'prob_change_goal': prob_change_goal}})
+
+                        for pas in vector:
+                            # if t['taxi 1'][0]['location'] == (0, 1):
+                            #     if t['taxi 1'][0]['fuel'] == 9:
+                            #         if t['taxi 1'][0]['capacity'] == 2:
+                            if pas['Dana']['location'] == (2, 2):
+                                if pas['Dana']['destination'] == (2, 2):
+                                    if pas['Dana']['possible_goals'] == ((0, 0), (2, 2)):
+                                        if pas['Dana']['prob_change_goal'] == 0.1:
+                                            print()
+
+                            t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, list(clients))}
+                            reward = get_reward(t, pas)
+                            states.append({'taxis': t, 'passengers': pas, 'reward': reward})
+
+                            # when passenger not in taxi
+                            t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, [])}
+                            reward = get_reward(t, pas)
+                            states.append({'taxis': t, 'passengers': pas, 'reward': reward})
+
+
+
 
 
         # todo: TEMPORARY, CHANGE WHEN FINISHED WITH ONE TAXI
@@ -176,9 +310,10 @@ def taxisComputation(input):
         #     for c in comb:
         #         taxis_states.append({'taxis': {pre[0][0]: {'location': pre[1][0], 'fuel': c[0][0], 'capacity': c[0][1]},
         #                                        pre[0][1]: {'location': pre[1][1], 'fuel': c[1][0], 'capacity': c[1][1]}}})
-    return taxis_states
+    return states
 
-
+# todo: faire que cette fonction soit incorporer dans la precedente des taxis en faisant que l'emplacement des passager qui
+# sont dans le taxi soit correct. et rajouter toutes les autres option d'emplacement des passeger qui sont pas dans le taxi
 def passengersComputation(passengers):
     result = []
     for passenger in passengers:
@@ -209,6 +344,18 @@ def combination(sample_list):
         list_combinations += list(combinations(sample_list, n))
     return list_combinations
 
+
+def listDictsRemoveDuplicates(l):
+    seen = []
+    indx = []
+    cnt = 0
+    for d in l:
+        t = str(tuple(d.items()))
+        if t not in seen:
+            seen.append(t)
+            indx.append(cnt)
+        cnt+=1
+    return [l[index] for index in indx]
 
 class Distances:
     def __init__(self, initial):
