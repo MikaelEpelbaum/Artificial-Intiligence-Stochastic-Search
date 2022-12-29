@@ -25,14 +25,15 @@ class OptimalTaxiAgent:
         initial_state = {'taxis': self.initial_improved['taxis'], 'passengers': passengers, 'remains': len(passengers)}
 
         all_states = Moves.states(self, initial_state)
-        self.optimal_actions = self.value_iteration_algorithm(all_states)
+        self.optimal_actions = self.value_iteration_algorithm(all_states, copy.deepcopy(self.initial_improved))
+        print('wow')
 
 
     def act(self, state):
         raise NotImplemented
 
-    def value_iteration_algorithm(self, v0):
-        return value_iteration(self.initial_improved, v0)
+    def value_iteration_algorithm(self, v0, initial_improved):
+        return value_iteration(self.initial_improved, v0, initial_improved)
 
 
 
@@ -58,7 +59,7 @@ class Moves:
         state. The result should be a tuple (or other iterable) of actions
         as defined in the problem description file"""
         if state["remains"] == 0:
-            return
+            return 0, '.'
         n, m = np.shape(state['map'])
         steps = [(0, 1), (1, 0), (0, -1), (-1, 0)]
         taxis_dict = state["taxis"]
@@ -87,7 +88,7 @@ class Moves:
                 taxis_actions[taxi].append(("pick up", taxi, pas))
             # does the taxi has passengers?
             if len(taxis_dict[taxi][1]) > 0:
-                to_drop_off = [passenger for passenger in passengers if (passengers[passenger]['location'] == passengers[passenger]['destination'] == taxis_dict[taxi][0]['location'] and passengers[passenger] in taxis_dict[taxi][1])]
+                to_drop_off = [passenger for passenger in passengers if (passengers[passenger]['location'] == passengers[passenger]['destination'] == taxis_dict[taxi][0]['location'] and passenger in taxis_dict[taxi][1])]
                 # to_drop_off = [passenger for passenger, loc_pos in passengers.items() if
                 #                loc_pos[0]["destination"] == loc_pos[0]["location"] and passenger in taxis_dict[taxi][1]]
                 for pas in to_drop_off:
@@ -116,18 +117,22 @@ class Moves:
                     if moves_length > moves_reduced:
                         cart_copy.remove(cart)
             cartesian = cart_copy
+
+        reset = True
+        for pas in state['passengers']:
+            if state['passengers'][pas]['location'] != state['passengers'][pas]['destination']:
+                reset = False
+        if reset:
+            return [('reset')]
         return cartesian
 
 
-def value_iteration(state, v0, precedent = None):
-    if state == precedent:
-        return -10000, []
-    if state['turns to go'] == 0:
-        return -10000, []
+def value_iteration(state, v0, initial_improved, precedent = None):
     possible_actions = Moves.actions(state)
     chain = []
+    if state['turns to go'] == 1:
+        return state['reward'], state
     for action_set in possible_actions:
-        # chose state representing action
         for action in action_set:
             l = len(action)
             new_state = copy.deepcopy(state)
@@ -135,7 +140,10 @@ def value_iteration(state, v0, precedent = None):
             if l > 2:
                 if action[0] == 'move':
                     new_state = copy.deepcopy(new_state)
-                    new_state['taxis'][action[1]][0]['fuel'] -= 1
+                    # fuel update
+                    new_state['taxis'][action[1]] = [
+                        {'location': new_state['taxis'][action[1]][0]['location'], 'fuel': new_state['taxis'][action[1]][0]['fuel']-1,
+                         'capacity': new_state['taxis'][action[1]][0]['capacity']}, new_state['taxis'][action[1]][1]]
                     new_state['taxis'][action[1]][0]['location'] = action[2]
                     for pas in new_state['taxis'][action[1]][1]:
                         new_state['passengers'][pas]['location'] = action[2]
@@ -157,7 +165,7 @@ def value_iteration(state, v0, precedent = None):
                             if taxi == action[1] and new_state['taxis'][taxi][0]['capacity'] > len(new_state['taxis'][taxi][1]):
                                 new_state['taxis'][taxi] = [
                                     {'location': new_state['taxis'][taxi][0]['location'], 'fuel': new_state['taxis'][taxi][0]['fuel'],
-                                     'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]]]
+                                     'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]], new_state['taxis'][taxi][0]['fuel']]
                                 chain.append(new_state)
                                 for pas in list(new_state['passengers'].keys()):
                                     for loc in new_state['passengers'][pas]['possible_goals']:
@@ -167,13 +175,18 @@ def value_iteration(state, v0, precedent = None):
                                         chain.append(temp)
                 if action[0] == 'drop off':
                     new_state = copy.deepcopy(state)
+                    new_state['taxis'][action[1]][1].remove(action[2])
+                    new_state['remains'] -=1
                     new_state['reward'] = 100
+                    chain.append(new_state)
             if l > 1:
                 if action[0] == 'refuel':
                     new_state = copy.deepcopy(state)
+                    new_state['taxis'][action[1]][0]['fuel'] = initial_improved['taxis'][action[1]][0]['fuel']
                     new_state['reward'] = -10
+                    chain.append(new_state)
                 if action[0] == 'wait':
-                    # new_state['reward'] = 0
+                    new_state['reward'] = 0
                     chain.append(new_state)
                     for pas in list(new_state['passengers'].keys()):
                         for loc in new_state['passengers'][pas]['possible_goals']:
@@ -181,36 +194,49 @@ def value_iteration(state, v0, precedent = None):
                             temp['passengers'][pas]['destination'] = loc
                             temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
                             chain.append(temp)
+            if l == 1:
+                if action_set == 'reset':
+                    initial = copy.deepcopy(initial_improved)
+                    initial['turns to go'] = new_state['turns to go']
+                    initial['reward'] = -50
+                    chain.append(initial)
+
+                if action_set == 'terminate':
+                    # todo: todo
+                    print('q')
 
 #     calculate shits now and use recursion principle
     chain = listDictsRemoveDuplicates(chain)
     consts, divergents = get_const_goals(state, chain)
+    if len(consts) == 0:
+        return 0, '.'
+    temp = []
+    paths = []
     for const in consts:
-        temp = []
-        paths = []
         assos_divergents = get_concording_divergents(const, divergents)
         for pas in const['passengers']:
             prob_to_stay = 1 - const['passengers'][pas]['prob_change_goal']
-            val, path = 0, []
-
-            t = copy.deepcopy(const)
-            t['turns to go'] += 1
-            if t == state:
-                return -10000, []
-
-            val, path = value_iteration(const, v0, state)
-
-            paths.append(path)
+            val, path = value_iteration(const, v0, initial_improved, state)
             temp.append(prob_to_stay * val)
-            for div in assos_divergents:
-                val, path = value_iteration(div, v0, state)
-                paths.append(path)
-                temp.append(((1-prob_to_stay)/len(assos_divergents))*val)
-            indice = np.argmax(temp)
-            if indice == 0:
-                return temp[indice], paths.append(const)
-            else:
-                return temp[indice], paths.append(assos_divergents[indice-1])
+            paths.append(path)
+        for div in assos_divergents:
+            val, path = value_iteration(div, v0, initial_improved, state)
+            temp.append(((1-prob_to_stay)/len(assos_divergents))*val)
+            paths.append(path)
+
+    indice = np.argmax(temp)
+
+    if state['turns to go'] == initial_improved['turns to go']:
+        return temp[indice], paths
+
+    if state['turns to go'] == 40:
+        print('')
+
+    if state['turns to go'] == 2:
+        return temp[indice], [paths[indice], state]
+    else:
+        paths[indice].append(state)
+        return temp[indice], paths[indice]
 
 
 def get_const_goals(state, chain):
@@ -218,6 +244,8 @@ def get_const_goals(state, chain):
     divergents = []
     cur_dests = [state['passengers'][pas]['destination'] for pas in state['passengers']]
     for i, c in enumerate(chain):
+        if chain[i]['turns to go'] == 0:
+            continue
         c_const_dest = [chain[i]['passengers'][pas]['destination'] for pas in chain[i]['passengers']]
         if cur_dests == c_const_dest:
             consts.append(c)
@@ -241,7 +269,7 @@ def max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map,
     n, m = np.shape(map)
     n_nodes = n*m
     flat_map = flatten(map)
-    imp_indx = np.argwhere(np.array(flat_map) == 'F') +1
+    imp_indx = np.argwhere(np.array(flat_map) == 'I') +1
     gas_indx = flatten(np.argwhere(np.array(flat_map) == 'G') + 1)
     original_loc = taxis[pre[0][0]]['location']
     original_loc = m * original_loc[0] + original_loc[1]+1
@@ -464,20 +492,30 @@ class Distances:
 
 
 if __name__ == "__main__":
-    state = {
-        "optimal": True,
-        "map": [["P", "P", "P"], ["P", "G", "P"], ["P", "P", "P"]],
-        "taxis": {"taxi 1": {"location": (0, 0), "fuel": 10, "capacity": 2}},
-        "passengers": {
-            "Dana": {
-                "location": (2, 2),
-                "destination": (0, 0),
-                "possible_goals": ((0, 0), (2, 2)),
-                "prob_change_goal": 0.1,
-            }
-        },
-        "turns to go": 100,
+    state =     {
+        'optimal': True,
+        "turns to go": 50,
+        'map': [['P', 'P', 'G', 'P', 'P'], ],
+        'taxis': {'taxi 1': {'location': (0, 0), 'fuel': 10, 'capacity': 1}},
+        'passengers': {'Michael': {'location': (0, 0), 'destination': (0, 4),
+                                   "possible_goals": ((0, 0), (0, 4)), "prob_change_goal": 0.2},
+                       }
     }
+
+    # state = {
+    #     "optimal": True,
+    #     "map": [["P", "P", "P"], ["P", "G", "P"], ["P", "P", "P"]],
+    #     "taxis": {"taxi 1": {"location": (0, 0), "fuel": 10, "capacity": 2}},
+    #     "passengers": {
+    #         "Dana": {
+    #             "location": (2, 2),
+    #             "destination": (0, 0),
+    #             "possible_goals": ((0, 0), (2, 2)),
+    #             "prob_change_goal": 0.1,
+    #         }
+    #     },
+    #     "turns to go": 100,
+    # }
     # state = {
     #     'optimal': True,
     #     "turns to go": 50,
