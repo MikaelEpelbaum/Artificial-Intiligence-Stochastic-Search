@@ -3,6 +3,7 @@ import copy
 import numpy as np
 from itertools import combinations, permutations, product
 import networkx as nx
+import time
 
 ids = ["111111111", "222222222"]
 
@@ -23,17 +24,108 @@ class OptimalTaxiAgent:
         # boolean False to indicate passenger wasn't picked yet
         passengers = {passenger: (passengers.get(passenger), False) for passenger in passengers.keys()}
         initial_state = {'taxis': self.initial_improved['taxis'], 'passengers': passengers, 'remains': len(passengers)}
-
-        all_states = Moves.states(self, initial_state)
-        self.optimal_actions = self.value_iteration_algorithm(all_states, copy.deepcopy(self.initial_improved))
+        self.best_actions = {}
+        all_states = statesComputation(self)
+        self.v0 = all_states
+        self.optimal_actions = value_iteration(self)
         print('wow')
 
 
     def act(self, state):
         raise NotImplemented
 
-    def value_iteration_algorithm(self, v0, initial_improved):
-        return value_iteration(self.initial_improved, v0, initial_improved)
+    def value_iteration_algorithm(self, initial_improved):
+        return value_iteration(self.initial_improved, initial_improved)
+
+    def statesComputation(input):
+        map = input.map
+        n, m = np.shape(map)
+        # all possible locations
+        locations = []
+        for i in range(n):
+            for j in range(m):
+                if map[i][j] != 'I':
+                    locations.append((i, j))
+
+        # all taxis combinations
+        taxis = list(state['taxis'].keys())
+        taxis_combinations = combination(taxis)
+
+        # all taxis locations cross combinations
+        taxis_cross_locations_combinations = []
+        locations_combinations = [list(combinations(locations, i)) for i in range(1, 1 + len(taxis))]
+        for taxis_comb in taxis_combinations:
+            for permutation in permutations(taxis_comb):
+                taxis_cross_locations_combinations.append([permutation, locations_combinations[len(permutation) - 1]])
+
+        # taxis without fuel and capacities
+
+        pre_state = []
+        for elem in taxis_cross_locations_combinations:
+            # elem[0] are the taxis, elem[1] are the locations to assign to those taxis
+            for i in range(len(elem[1])):
+                pre_state.append([elem[0], elem[1][i]])
+
+        # every taxis fuel possibilities
+        # taxis_states = []
+        states = [[] for i in range(input.initial['turns to go'])]
+        for pre in pre_state:
+            fuels = []
+            capacities = []
+            # je doit metre des fuel possible uniquementet pas toutes les options en fonction de la distance minimal de la station d'escence
+            # ou de la case de depart
+
+            highest_fuel_possible_at_location = max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map, input.initial['taxis'])
+            fuels = [i for i in range(highest_fuel_possible_at_location + 1)]
+            # one taxi
+            if len(taxis) == 1:
+                for fuel in fuels:
+                    cap = input.initial['taxis'][pre[0][0]]['capacity']
+                    # states avec les passager
+                    # taxis_states.append({'taxis': [{pre[0][0]: {'location': pre[1][0], 'fuel': fuel, 'capacity': cap}}, []]})
+                    passengers = list(input.initial['passengers'].keys())
+                    for i in range(min(cap, len(passengers)) + 1):
+                        passengers_possibilities = []
+                        c = list(combinations(passengers, i))
+                        for clients in c:
+                            # passengers data
+                            vector = []
+                            for client in clients:
+                                # client is in taxi
+                                destination = input.initial['passengers'][client]['destination']
+                                possible_goals = [g for g in input.initial['passengers'][client]['possible_goals']]
+                                prob_change_goal = input.initial['passengers'][client]['prob_change_goal']
+                                locs = set(list([destination]) + possible_goals)
+                                for possible_dest in locs:
+                                    for possible_loc in locations:
+                                        vector.append({
+                                            client: {'location': possible_loc, 'destination': possible_dest, 'possible_goals': tuple(possible_goals),
+                                                     'prob_change_goal': prob_change_goal}})
+                            passengers_possibilities.append(vector)
+                        prod = passengers_possibilities[0]
+                        for i in range(1, len(passengers_possibilities)):
+                            if len(passengers_possibilities) > 1:
+                                prod = list(product(prod, passengers_possibilities[i]))
+                        for pas in prod:
+                            pas_key = list(pas.keys())[0]
+                            pas = pas_arranging(pas)
+                            t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, list(clients))}
+                            cur_pas = copy.deepcopy(pas)
+                            cur_pas[pas_key]['location'] = pre[0][0]
+                            for j in range(input.initial['turns to go']):
+                                states[j].append({'taxis': t, 'passengers': cur_pas})
+
+                            # when passenger not in taxi
+                            if pas[pas_key]['location'] not in pas[pas_key]['possible_goals'] + pas[pas_key]['destination']:
+                                continue
+                            t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, [])}
+                            for j in range(input.initial['turns to go']):
+                                states[j].append({'taxis': t, 'passengers': pas})
+        for i in range(input.initial['turns to go']):
+            states[i] = listDictsRemoveDuplicates(states[i])
+
+
+
 
 
 
@@ -58,8 +150,11 @@ class Moves:
         """Returns all the actions that can be executed in the given
         state. The result should be a tuple (or other iterable) of actions
         as defined in the problem description file"""
-        if state["remains"] == 0:
-            return 0, '.'
+        try:
+            if state["remains"] == 0:
+                return 0, '.'
+        except:
+            pass
         n, m = np.shape(state['map'])
         steps = [(0, 1), (1, 0), (0, -1), (-1, 0)]
         taxis_dict = state["taxis"]
@@ -88,7 +183,8 @@ class Moves:
                 taxis_actions[taxi].append(("pick up", taxi, pas))
             # does the taxi has passengers?
             if len(taxis_dict[taxi][1]) > 0:
-                to_drop_off = [passenger for passenger in passengers if (passengers[passenger]['location'] == passengers[passenger]['destination'] == taxis_dict[taxi][0]['location'] and passenger in taxis_dict[taxi][1])]
+                to_drop_off = [passenger for passenger in passengers  if passengers[passenger]['location'] == taxi and taxi_details[0]['location'] == passengers[passenger]['destination']]
+                # to_drop_off = [passenger for passenger in passengers if (passengers[passenger]['location'] == passengers[passenger]['destination'] == taxis_dict[taxi][0]['location'] and passenger in taxis_dict[taxi][1])]
                 # to_drop_off = [passenger for passenger, loc_pos in passengers.items() if
                 #                loc_pos[0]["destination"] == loc_pos[0]["location"] and passenger in taxis_dict[taxi][1]]
                 for pas in to_drop_off:
@@ -126,46 +222,42 @@ class Moves:
             return [('reset')]
         return cartesian
 
+    def actions_effects(state, possible_actions, v0, initial_improved):
+        chain = []
+        for action_set in possible_actions:
+            for action in action_set:
+                l = len(action)
+                new_state = copy.deepcopy(state)
+                if l > 2:
+                    if action[0] == 'move':
+                        new_state = copy.deepcopy(new_state)
+                        # fuel update
+                        new_state['taxis'][action[1]] = [
+                            {'location': new_state['taxis'][action[1]][0]['location'], 'fuel': new_state['taxis'][action[1]][0]['fuel'] - 1,
+                             'capacity': new_state['taxis'][action[1]][0]['capacity']}, new_state['taxis'][action[1]][1]]
+                        new_state['taxis'][action[1]][0]['location'] = action[2]
+                        for pas in new_state['taxis'][action[1]][1]:
+                            new_state['passengers'][pas]['location'] = action[2]
+                        for a in v0:
+                            if a['taxis'][action[1]][0]['location'] == new_state['taxis'][action[1]][0]['location']:
+                                if a['taxis'][action[1]][0]['fuel'] == new_state['taxis'][action[1]][0]['fuel']:
+                                    for pas in list(new_state['passengers'].keys()):
+                                        if new_state['passengers'][pas]['location'] == a['passengers'][pas]['location']:
+                                            if new_state['taxis'][action[1]][1] == a['taxis'][action[1]][1]:
+                                                # todo: check that it works if there are passengers in the list
+                                                temp = copy.deepcopy(new_state)
+                                                temp['taxis'][action[1]] = a['taxis'][action[1]]
+                                                temp['passengers'] = copy.deepcopy(a['passengers'])
+                                                temp['reward'] = a['reward']
+                                                chain.append(temp)
 
-def value_iteration(state, v0, initial_improved, precedent = None):
-    possible_actions = Moves.actions(state)
-    chain = []
-    if state['turns to go'] == 1:
-        return state['reward'], state
-    for action_set in possible_actions:
-        for action in action_set:
-            l = len(action)
-            new_state = copy.deepcopy(state)
-            new_state['turns to go'] -= 1
-            if l > 2:
-                if action[0] == 'move':
-                    new_state = copy.deepcopy(new_state)
-                    # fuel update
-                    new_state['taxis'][action[1]] = [
-                        {'location': new_state['taxis'][action[1]][0]['location'], 'fuel': new_state['taxis'][action[1]][0]['fuel']-1,
-                         'capacity': new_state['taxis'][action[1]][0]['capacity']}, new_state['taxis'][action[1]][1]]
-                    new_state['taxis'][action[1]][0]['location'] = action[2]
-                    for pas in new_state['taxis'][action[1]][1]:
-                        new_state['passengers'][pas]['location'] = action[2]
-                    for a in v0:
-                        if a['taxis'][action[1]][0]['location'] == new_state['taxis'][action[1]][0]['location']:
-                            if a['taxis'][action[1]][0]['fuel'] == new_state['taxis'][action[1]][0]['fuel']:
-                                for pas in list(new_state['passengers'].keys()):
-                                    if new_state['passengers'][pas]['location'] == a['passengers'][pas]['location']:
-                                        if new_state['taxis'][action[1]][1] == a['taxis'][action[1]][1]:
-                                            # todo: check that it works if there are passengers in the list
-                                            temp = copy.deepcopy(new_state)
-                                            temp['taxis'][action[1]] = a['taxis'][action[1]]
-                                            temp['passengers'] = copy.deepcopy(a['passengers'])
-                                            temp['reward'] = a['reward']
-                                            chain.append(temp)
-
-                if action[0] == 'pick up':
-                    for taxi in new_state['taxis']:
+                    if action[0] == 'pick up':
+                        for taxi in new_state['taxis']:
                             if taxi == action[1] and new_state['taxis'][taxi][0]['capacity'] > len(new_state['taxis'][taxi][1]):
                                 new_state['taxis'][taxi] = [
                                     {'location': new_state['taxis'][taxi][0]['location'], 'fuel': new_state['taxis'][taxi][0]['fuel'],
-                                     'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]], new_state['taxis'][taxi][0]['fuel']]
+                                     'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]],
+                                    new_state['taxis'][taxi][0]['fuel']]
                                 chain.append(new_state)
                                 for pas in list(new_state['passengers'].keys()):
                                     for loc in new_state['passengers'][pas]['possible_goals']:
@@ -173,70 +265,237 @@ def value_iteration(state, v0, initial_improved, precedent = None):
                                         temp['passengers'][pas]['destination'] = loc
                                         temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
                                         chain.append(temp)
-                if action[0] == 'drop off':
-                    new_state = copy.deepcopy(state)
-                    new_state['taxis'][action[1]][1].remove(action[2])
-                    new_state['remains'] -=1
-                    new_state['reward'] = 100
-                    chain.append(new_state)
-            if l > 1:
-                if action[0] == 'refuel':
-                    new_state = copy.deepcopy(state)
-                    new_state['taxis'][action[1]][0]['fuel'] = initial_improved['taxis'][action[1]][0]['fuel']
-                    new_state['reward'] = -10
-                    chain.append(new_state)
-                if action[0] == 'wait':
-                    new_state['reward'] = 0
-                    chain.append(new_state)
-                    for pas in list(new_state['passengers'].keys()):
-                        for loc in new_state['passengers'][pas]['possible_goals']:
-                            temp = copy.deepcopy(new_state)
-                            temp['passengers'][pas]['destination'] = loc
-                            temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
-                            chain.append(temp)
-            if l == 1:
-                if action_set == 'reset':
-                    initial = copy.deepcopy(initial_improved)
-                    initial['turns to go'] = new_state['turns to go']
-                    initial['reward'] = -50
-                    chain.append(initial)
+                    if action[0] == 'drop off':
+                        new_state = copy.deepcopy(state)
+                        new_state['taxis'][action[1]][1].remove(action[2])
+                        new_state['reward'] = 100
+                        chain.append(new_state)
+                if l > 1:
+                    if action[0] == 'refuel':
+                        new_state = copy.deepcopy(state)
+                        new_state['taxis'][action[1]][0]['fuel'] = initial_improved['taxis'][action[1]][0]['fuel']
+                        new_state['reward'] = -10
+                        chain.append(new_state)
+                    if action[0] == 'wait':
+                        new_state['reward'] = 0
+                        chain.append(new_state)
+                        for pas in list(new_state['passengers'].keys()):
+                            for loc in new_state['passengers'][pas]['possible_goals']:
+                                temp = copy.deepcopy(new_state)
+                                temp['passengers'][pas]['destination'] = loc
+                                temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
+                                chain.append(temp)
+        chain = listDictsRemoveDuplicates(chain)
+        return chain
 
-                if action_set == 'terminate':
-                    # todo: todo
-                    print('q')
+def intersection(lst1, lst2):
+    lst3 = [value for value in lst1 if value in lst2]
+    return lst3
 
-#     calculate shits now and use recursion principle
-    chain = listDictsRemoveDuplicates(chain)
-    consts, divergents = get_const_goals(state, chain)
-    if len(consts) == 0:
-        return 0, '.'
-    temp = []
-    paths = []
-    for const in consts:
-        assos_divergents = get_concording_divergents(const, divergents)
-        for pas in const['passengers']:
-            prob_to_stay = 1 - const['passengers'][pas]['prob_change_goal']
-            val, path = value_iteration(const, v0, initial_improved, state)
-            temp.append(prob_to_stay * val)
-            paths.append(path)
-        for div in assos_divergents:
-            val, path = value_iteration(div, v0, initial_improved, state)
-            temp.append(((1-prob_to_stay)/len(assos_divergents))*val)
-            paths.append(path)
+def get_list_dictionary_part_match_index(v0, dic):
+    keys1 = list(v0[0].keys())
+    keys2 = list(dic.keys())
+    keys = intersection(keys1, keys2)
+    keys.remove('map')
 
-    indice = np.argmax(temp)
+    j = -1
+    for i, d in enumerate(v0):
+        bool = True
+        for key in keys:
+            if v0[i][key] != dic[key]:
+                bool = False
+        if bool:
+            return i
+    return j
 
-    if state['turns to go'] == initial_improved['turns to go']:
-        return temp[indice], paths
+def get_new_value(state, v0, i, initial_improved):
+    for act in Moves.actions(state):
+        v = 0
+        for result_state in Moves.actions_effects(state, Moves.actions(state), v0, initial_improved):
+            dic = {'taxis': state['taxis'], 'passengers': state['passengers'], 'map': map}
+            j = get_list_dictionary_part_match_index(v0, dic)
+            v += T(state, result_state) * R(act) + v0[j]["value"]
+            if v >= v0[j]['value']:
+                v0[j]['action'] = act
+                v0[j]['value'] = v
+    return v0[i]['value']
 
-    if state['turns to go'] == 40:
-        print('')
 
-    if state['turns to go'] == 2:
-        return temp[indice], [paths[indice], state]
-    else:
-        paths[indice].append(state)
-        return temp[indice], paths[indice]
+def T(current_state, result_state):
+    t = 1
+    for passenger in current_state["passengers"]:
+        passenger_data = current_state["passengers"][passenger]
+        prob_change_goal = passenger_data["prob_change_goal"]
+        possible_goals = passenger_data["possible_goals"]
+        current_destination = passenger_data["destination"]
+        resulting_destination = result_state["passengers"][passenger]["destination"]
+
+        if current_destination != resulting_destination:
+            # If the passenger changed their goal, multiply t by the probability of changing goals
+            t *= prob_change_goal / len(possible_goals)
+        else:
+            # If the passenger didn't change their goal, multiply t by the probability of not changing goals
+            t *= (1 - prob_change_goal)
+    return t
+
+def R(act):
+    l = len(act)
+    if act[0] == 'drop off':
+        return 100
+    if act[0] == 'refuel':
+        return -10
+    if act == 'reset':
+        return -50
+    return 0
+
+
+
+
+    # initial_time = time.perf_counter()
+    # chronometer = time.perf_counter()
+    # dif_maximal = 1
+    # while chronometer - initial_time < 180:
+    #     i = get_list_dictionary_part_match_index(v0, state)
+    #     pred_val = v0[i]['value']
+    #     for v in v0:
+    #         cur_v = v['value']
+    #         val = get_new_value(v, v0, i, initial_improved)
+    #         if abs(pred_val - val) >= dif_maximal:
+    #             dif_maximal = abs(pred_val - val)
+    #     chronometer = time.perf_counter()
+    # choosed = False
+    # for v in v0:
+    #     if not 'action' in v: #not v['action']:
+    #         for taxi in v['taxis']:
+    #             dup = copy.deepcopy(state)
+    #             dup['action'] = 0
+    #             while dup['taxis'][taxi][0]['fuel'] - 1 > 0:
+    #                 dup['taxis'][taxi][0]['fuel'] -=1
+    #                 if dup['action']:
+    #                     v0[v] = dup
+    #                     choosed = True
+    #                     break
+    #             if not choosed:
+    #                 while dup['taxis'][taxi][0]['fuel'] + 1 > initial_improved['taxis'][taxi][0]['fuel']:
+    #                     dup['taxis'][taxi][0]['fuel'] = dup['taxis'][taxi][0]['fuel'] + 1
+    #                     if dup['action']:
+    #                         v0[v] = dup
+    #                         choosed = True
+    #                         break
+    #             if choosed:
+    #                 break
+    #         if not 'action' in v:
+    #             v['action'] = 'reset'
+    # return v0
+
+
+
+#     possible_actions = Moves.actions(state)
+#     chain = []
+#     if state['turns to go'] == 1:
+#         return state['reward'], state
+#     for action_set in possible_actions:
+#         for action in action_set:
+#             l = len(action)
+#             new_state = copy.deepcopy(state)
+#             new_state['turns to go'] -= 1
+#             if l > 2:
+#                 if action[0] == 'move':
+#                     new_state = copy.deepcopy(new_state)
+#                     # fuel update
+#                     new_state['taxis'][action[1]] = [
+#                         {'location': new_state['taxis'][action[1]][0]['location'], 'fuel': new_state['taxis'][action[1]][0]['fuel']-1,
+#                          'capacity': new_state['taxis'][action[1]][0]['capacity']}, new_state['taxis'][action[1]][1]]
+#                     new_state['taxis'][action[1]][0]['location'] = action[2]
+#                     for pas in new_state['taxis'][action[1]][1]:
+#                         new_state['passengers'][pas]['location'] = action[2]
+#                     for a in v0:
+#                         if a['taxis'][action[1]][0]['location'] == new_state['taxis'][action[1]][0]['location']:
+#                             if a['taxis'][action[1]][0]['fuel'] == new_state['taxis'][action[1]][0]['fuel']:
+#                                 for pas in list(new_state['passengers'].keys()):
+#                                     if new_state['passengers'][pas]['location'] == a['passengers'][pas]['location']:
+#                                         if new_state['taxis'][action[1]][1] == a['taxis'][action[1]][1]:
+#                                             # todo: check that it works if there are passengers in the list
+#                                             temp = copy.deepcopy(new_state)
+#                                             temp['taxis'][action[1]] = a['taxis'][action[1]]
+#                                             temp['passengers'] = copy.deepcopy(a['passengers'])
+#                                             temp['reward'] = a['reward']
+#                                             chain.append(temp)
+#
+#                 if action[0] == 'pick up':
+#                     for taxi in new_state['taxis']:
+#                             if taxi == action[1] and new_state['taxis'][taxi][0]['capacity'] > len(new_state['taxis'][taxi][1]):
+#                                 new_state['taxis'][taxi] = [
+#                                     {'location': new_state['taxis'][taxi][0]['location'], 'fuel': new_state['taxis'][taxi][0]['fuel'],
+#                                      'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]], new_state['taxis'][taxi][0]['fuel']]
+#                                 chain.append(new_state)
+#                                 for pas in list(new_state['passengers'].keys()):
+#                                     for loc in new_state['passengers'][pas]['possible_goals']:
+#                                         temp = copy.deepcopy(new_state)
+#                                         temp['passengers'][pas]['destination'] = loc
+#                                         temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
+#                                         chain.append(temp)
+#                 if action[0] == 'drop off':
+#                     new_state = copy.deepcopy(state)
+#                     new_state['taxis'][action[1]][1].remove(action[2])
+#                     new_state['remains'] -=1
+#                     new_state['reward'] = 100
+#                     chain.append(new_state)
+#             if l > 1:
+#                 if action[0] == 'refuel':
+#                     new_state = copy.deepcopy(state)
+#                     new_state['taxis'][action[1]][0]['fuel'] = initial_improved['taxis'][action[1]][0]['fuel']
+#                     new_state['reward'] = -10
+#                     chain.append(new_state)
+#                 if action[0] == 'wait':
+#                     new_state['reward'] = 0
+#                     chain.append(new_state)
+#                     for pas in list(new_state['passengers'].keys()):
+#                         for loc in new_state['passengers'][pas]['possible_goals']:
+#                             temp = copy.deepcopy(new_state)
+#                             temp['passengers'][pas]['destination'] = loc
+#                             temp['reward'] = get_reward(temp['taxis'], temp['passengers'])
+#                             chain.append(temp)
+#             if l == 1:
+#                 if action_set == 'reset':
+#                     initial = copy.deepcopy(initial_improved)
+#                     initial['turns to go'] = new_state['turns to go']
+#                     initial['reward'] = -50
+#                     chain.append(initial)
+#
+#                 if action_set == 'terminate':
+#                     # todo: todo
+#                     print('q')
+#
+# #     calculate shits now and use recursion principle
+#     chain = listDictsRemoveDuplicates(chain)
+#     consts, divergents = get_const_goals(state, chain)
+#     if len(consts) == 0:
+#         return 0, '.'
+#     temp = []
+#     paths = []
+#     for const in consts:
+#         assos_divergents = get_concording_divergents(const, divergents)
+#         for pas in const['passengers']:
+#             prob_to_stay = 1 - const['passengers'][pas]['prob_change_goal']
+#             val, path = value_iteration(const, v0, initial_improved, state)
+#             temp.append(prob_to_stay * val)
+#             paths.append(path)
+#         for div in assos_divergents:
+#             val, path = value_iteration(div, v0, initial_improved, state)
+#             temp.append(((1-prob_to_stay)/len(assos_divergents))*val)
+#             paths.append(path)
+#
+#     indice = np.argmax(temp)
+#
+#     if state['turns to go'] == initial_improved['turns to go']:
+#         return temp[indice], paths
+#
+#     if state['turns to go'] == 2:
+#         return temp[indice], [paths[indice], state]
+#     else:
+#         paths[indice].append(state)
+#         return temp[indice], paths[indice]
 
 
 def get_const_goals(state, chain):
@@ -293,7 +552,6 @@ def max_fuel_on_min_drivable_manhattan_distance_from_gas_and_departure(pre, map,
     return taxis[pre[0][0]]['fuel'] - min_dist_cur_loc_gas
 
 def get_reward(taxis, passengers):
-    #todo: think if I should implement the rest of the grading here or even if this grading is right here
     count = []
     for passenger in list(passengers.keys()):
         for taxi in list(taxis.keys()):
@@ -335,7 +593,7 @@ def statesComputation(input):
 
     # every taxis fuel possibilities
     # taxis_states = []
-    states = []
+    states = [[] for i in range(input.initial['turns to go'])]
     for pre in pre_state:
         fuels = []
         capacities = []
@@ -374,20 +632,22 @@ def statesComputation(input):
                         if len(passengers_possibilities) > 1:
                             prod = list(product(prod, passengers_possibilities[i]))
                     for pas in prod:
+                        pas_key = list(pas.keys())[0]
                         pas = pas_arranging(pas)
                         t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, list(clients))}
-                        reward = get_reward(t, pas)
-                        states.append({'taxis': t, 'passengers': pas, 'reward': reward})
+                        cur_pas = copy.deepcopy(pas)
+                        cur_pas[pas_key]['location'] = pre[0][0]
+                        for j in range(input.initial['turns to go']):
+                            states[j].append({'taxis': t, 'passengers': cur_pas})
 
                         # when passenger not in taxi
+                        if pas[pas_key]['location'] not in pas[pas_key]['possible_goals'] + pas[pas_key]['destination']:
+                            continue
                         t = {pre[0][0]: ({'location': pre[1][0], 'fuel': fuel, 'capacity': cap}, [])}
-                        reward = get_reward(t, pas)
-                        states.append({'taxis': t, 'passengers': pas, 'reward': reward})
-
-
-
-
-
+                        for j in range(input.initial['turns to go']):
+                            states[j].append({'taxis': t, 'passengers': pas})
+    for i in range(input.initial['turns to go']):
+        states[i] = listDictsRemoveDuplicates(states[i])
         # todo: TEMPORARY, CHANGE WHEN FINISHED WITH ONE TAXI
         # # two taxis
         # if len(taxis) == 2 and len(fuel_capacity_combinations) == 2:
@@ -396,6 +656,164 @@ def statesComputation(input):
         #         taxis_states.append({'taxis': {pre[0][0]: {'location': pre[1][0], 'fuel': c[0][0], 'capacity': c[0][1]},
         #                                        pre[0][1]: {'location': pre[1][1], 'fuel': c[1][0], 'capacity': c[1][1]}}})
     return states
+
+
+def value_iteration(input):
+    initial_improved = copy.deepcopy(input.initial_improved)
+    v = input.v0
+
+    new_values = [0 for i in range(len(v[0]))]
+
+    for i in range(len(v)):
+        print('running:'+ str(i))
+        prev_vals = copy.deepcopy(new_values)
+
+        for state in v[i]:
+            cop = copy.deepcopy(state)
+            cop['map'] = input.initial_improved['map']
+            actions = Moves.actions(cop)
+
+            actions_results = dict()
+            for action in actions:
+                if type(action) == str and action == 'reset':
+                    actions_results[action] = action_application(state, action, initial_improved)
+                else:
+                    actions_results[action[0]] = action_application(state, action, initial_improved)
+                if action == 'terminate':
+                    actions_results[action] = []
+            j = i-1
+            if j == -1:
+                j == 0
+            best_act_val, best_act = 0, 0
+            try:
+                best_act_val, best_act = best_behavoir(state, actions_results, v[j], prev_vals)
+            except Exception as e:
+                best_act_val, best_act = best_behavoir(state, actions_results, v[j], prev_vals)
+
+            new_values[i] = best_act_val
+
+            input.best_actions.update({str(state): best_act})
+
+
+
+def best_behavoir(state, actions_results, v, prev_vals):
+    action_values = {}
+    actions = list(actions_results.keys())
+
+    actions_weights = []
+    for action in actions:
+        values = []
+        passengers_probs = []
+        R = 0
+        if action[0] == 'drop off':
+            R = 100
+        if type(action) == str and action == 'reset':
+            R = -50
+        if action[0] == 'refuel':
+            R = -10
+        for sub_action in actions_results[action]:
+            loc = 0
+            try:
+                loc = v.index(sub_action)
+            except Exception as e:
+                print(e)
+                v.index(sub_action)
+            sub_action_val = prev_vals[loc]
+            values.append(sub_action_val)
+            for passenger in list(state['passengers'].keys()):
+                if state['passengers'][passenger]['destination'] == sub_action['passengers'][passenger]['destination']:
+    #               didn't change destination
+                    prob_reward = 1 - state['passengers'][passenger]['prob_change_goal']
+                    passengers_probs.append(prob_reward)
+                else:
+                    base = state['passengers'][passenger]['possible_goals']
+                    denominateur = len(base)
+                    if state['passengers'][passenger]['destination'] in base and denominateur > 1:
+                        denominateur -=1
+                    passengers_probs.append((state['passengers'][passenger]['prob_change_goal'])/denominateur)
+        # todo: CHECK CORRECTNESS
+        if type(action) == str and action == 'reset':
+            passengers_probs.append(1)
+            actions_weights.append(1)
+            values.append(1)
+        sigma = np.multiply(values, passengers_probs)
+        actions_weights.append(sum(sigma))
+    indice = 0
+    try:
+        indice = np.argmax(actions_weights)
+    except Exception as e:
+        indice = np.argmax(actions_weights)
+    try:
+        return R + sum(actions_weights[indice]), actions[indice]
+    except Exception as e:
+        if type(actions_weights[indice]) in [np.float64, int]:
+            return R + actions_weights[indice], actions[indice]
+
+
+def action_application(state, action, initial_improved):
+    if type(action) != str:
+        action = action[0]
+    chain = []
+    l = len(action)
+    new_state = copy.deepcopy(state)
+    if l > 2:
+        if action[0] == 'move':
+            new_state = copy.deepcopy(new_state)
+            # fuel update
+            new_state['taxis'][action[1]] = (
+                {'location': new_state['taxis'][action[1]][0]['location'], 'fuel': new_state['taxis'][action[1]][0]['fuel']-1,
+                 'capacity': new_state['taxis'][action[1]][0]['capacity']}, new_state['taxis'][action[1]][1])
+            new_state['taxis'][action[1]][0]['location'] = action[2]
+            chain.append(new_state)
+            for pas in list(new_state['passengers'].keys()):
+                for loc in new_state['passengers'][pas]['possible_goals']:
+                    temp = copy.deepcopy(new_state)
+                    temp['passengers'][pas]['destination'] = loc
+                    chain.append(temp)
+
+        if action[0] == 'pick up':
+            for taxi in new_state['taxis']:
+                    if taxi == action[1] and new_state['taxis'][taxi][0]['capacity'] > len(new_state['taxis'][taxi][1]):
+                        new_state['taxis'][taxi] = (
+                            {'location': new_state['taxis'][taxi][0]['location'], 'fuel': new_state['taxis'][taxi][0]['fuel'],
+                             'capacity': new_state['taxis'][taxi][0]['capacity']}, new_state['taxis'][taxi][1] + [action[2]])
+                        new_state['passengers'][action[2]]['location'] = taxi
+                        chain.append(new_state)
+                        for pas in list(new_state['passengers'].keys()):
+                            for loc in new_state['passengers'][pas]['possible_goals']:
+                                temp = copy.deepcopy(new_state)
+                                temp['passengers'][pas]['destination'] = loc
+                                chain.append(temp)
+        if action[0] == 'drop off':
+            new_state = copy.deepcopy(state)
+            new_state['passengers'][action[2]]['location'] = new_state['taxis'][action[1]][0]['location']
+            new_state['taxis'][action[1]][1].remove(action[2])
+            chain.append(new_state)
+    if l > 1:
+        if action[0] == 'refuel':
+            new_state = copy.deepcopy(state)
+            new_state['taxis'][action[1]][0]['fuel'] = initial_improved['taxis'][action[1]][0]['fuel']
+            chain.append(new_state)
+        if action[0] == 'wait':
+            chain.append(new_state)
+            for pas in list(new_state['passengers'].keys()):
+                for loc in new_state['passengers'][pas]['possible_goals']:
+                    temp = copy.deepcopy(new_state)
+                    temp['passengers'][pas]['destination'] = loc
+                    chain.append(temp)
+    if l == 1:
+        if action == 'reset':
+            initial = copy.deepcopy(initial_improved)
+            initial['turns to go'] = new_state['turns to go']
+            initial['reward'] = -50
+            chain.append(initial)
+
+        if action_set == 'terminate':
+            # todo: todo
+            print('q')
+    return listDictsRemoveDuplicates(chain)
+
+
 
 # todo: faire que cette fonction soit incorporer dans la precedente des taxis en faisant que l'emplacement des passager qui
 # sont dans le taxi soit correct. et rajouter toutes les autres option d'emplacement des passeger qui sont pas dans le taxi
@@ -492,30 +910,30 @@ class Distances:
 
 
 if __name__ == "__main__":
-    state =     {
-        'optimal': True,
-        "turns to go": 50,
-        'map': [['P', 'P', 'G', 'P', 'P'], ],
-        'taxis': {'taxi 1': {'location': (0, 0), 'fuel': 10, 'capacity': 1}},
-        'passengers': {'Michael': {'location': (0, 0), 'destination': (0, 4),
-                                   "possible_goals": ((0, 0), (0, 4)), "prob_change_goal": 0.2},
-                       }
-    }
-
-    # state = {
-    #     "optimal": True,
-    #     "map": [["P", "P", "P"], ["P", "G", "P"], ["P", "P", "P"]],
-    #     "taxis": {"taxi 1": {"location": (0, 0), "fuel": 10, "capacity": 2}},
-    #     "passengers": {
-    #         "Dana": {
-    #             "location": (2, 2),
-    #             "destination": (0, 0),
-    #             "possible_goals": ((0, 0), (2, 2)),
-    #             "prob_change_goal": 0.1,
-    #         }
-    #     },
-    #     "turns to go": 100,
+    # state =     {
+    #     'optimal': True,
+    #     "turns to go": 5,
+    #     'map': [['P', 'P', 'G', 'P', 'P'], ],
+    #     'taxis': {'taxi 1': {'location': (0, 0), 'fuel': 10, 'capacity': 1}},
+    #     'passengers': {'Michael': {'location': (0, 0), 'destination': (0, 4),
+    #                                "possible_goals": ((0, 0), (0, 4)), "prob_change_goal": 0.2},
+    #                    }
     # }
+
+    state = {
+        "optimal": True,
+        "map": [["P", "P", "P"], ["P", "G", "P"], ["P", "P", "P"]],
+        "taxis": {"taxi 1": {"location": (0, 0), "fuel": 10, "capacity": 2}},
+        "passengers": {
+            "Dana": {
+                "location": (2, 2),
+                "destination": (0, 0),
+                "possible_goals": ((0, 0), (2, 2)),
+                "prob_change_goal": 0.1,
+            }
+        },
+        "turns to go": 100,
+    }
     # state = {
     #     'optimal': True,
     #     "turns to go": 50,
